@@ -3,44 +3,85 @@ package redditoauth
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	//"io/ioutil"
+	"bytes"
+	"errors"
 	"net/http"
 	"net/url"
-  "strings"
-  "bytes"
+	"strings"
 )
 
-type secrets struct {
-	ClientID     string `json:"clientID"`
-	ClientSecret string `json:"secret"`
-}
-
 type credentials struct {
-	AccessToken  string `json:"access"`
-	RefreshToken string `json:"refresh"`
-	Duration     string `json:duration`
+	ClientID     string
+	ClientSecret string
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	Duration     string
+	UserAgent    string
 }
 
 var creds credentials
 
-func readSecrets(filename string) (secrets, error) {
-	data, err := ioutil.ReadFile(filename)
-	if err != nil {
-		return secrets{}, err
-	}
-
-	var secs secrets
-	err = json.Unmarshal(data, &secs)
-	if err != nil {
-		return secrets{}, err
-	}
-
-	return secs, nil
+//retrieves the saved clientID.
+//If no clientID is set, it returns the empty string
+func GetClientID() string {
+	return creds.ClientID
 }
 
-func buildurl(secs secrets, scopes []string, perm bool) (string, error) {
+//sets the clientID to the given string
+func SetClientID(cid string) {
+	creds.ClientID = cid
+}
+
+//retrieves the saved client secret.
+//If no client secret is set, it returns the empty string
+func GetClientSecret() string {
+	return creds.ClientSecret
+}
+
+//sets the clientID to the given string
+func SetClientSecret(sec string) {
+	creds.ClientSecret = sec
+}
+
+//retrieves the saved access token.
+//If no access token is set, it returns the empty string
+func GetAccessToken() string {
+	return creds.AccessToken
+}
+
+//sets the access token to the given string.
+//It should automatically be set in the PerformHandshake function
+func SetAccessToken(acc string) {
+	creds.AccessToken = acc
+}
+
+//retrieves the saved refresh token.
+//If no refresh token is set, it returns the empty string
+func GetRefreshToken() string {
+	return creds.RefreshToken
+}
+
+//sets the refresh token to the given string.
+//It should automatically be set in the PerformHandshake function
+func SetRefreshToken(refresh string) {
+	creds.RefreshToken = refresh
+}
+
+//retrieves the saved user agent string
+//if it isn't set, it is set to the empty string
+func GetUserAgent() string {
+	return creds.UserAgent
+}
+
+//sets the user agent string the the target string
+func SetUserAgent(agent string) {
+	creds.UserAgent = agent
+}
+
+func buildurl(scopes []string, perm bool) (string, error) {
 	params := url.Values{}
-	params.Add("client_id", secs.ClientID)
+	params.Add("client_id", creds.ClientID)
 	params["scope"] = scopes
 	params.Add("response_type", "code")
 	if perm {
@@ -54,73 +95,106 @@ func buildurl(secs secrets, scopes []string, perm bool) (string, error) {
 	return "https://https://www.reddit.com/api/v1/authorize?" + params.Encode(), nil
 }
 
-func PerformHandshake(filename string, scopes []string, perm bool) error {
-  redir := "http://localhost"
-  secs, err := readSecrets(filename)
-  if err != nil {
-    return err
-  }
-
-	link, err := buildurl(secs, scopes, perm)
+//performs an oauth handshake. Returns 3 values.
+//The first is an access token. The second a refreshToken. If an error occurs,
+//the third value will have an error and the other return fields will be empty strings
+//The first argument is the callback uri,
+//the second is a slice of strings representing reddit scopes.
+//The last argument is a bool that determines if we should ask for a refresh token.
+func PerformHandshake(callback string, scopes []string, perm bool) (string, string, error) {
+	err := validateCreds()
 	if err != nil {
-		return err
+		return "", "", err
+	}
+
+	link, err := buildurl(scopes, perm)
+	if err != nil {
+		return "", "", err
 	}
 	fmt.Println("Please visit the following url:", link)
 	fmt.Print("Please enter in the code: ")
 	var code string
 	_, err = fmt.Scanln(&code)
 	if err != nil {
+		return "", "", err
+	}
+	params := url.Values{}
+	params.Add("grant_type", "authorization_code")
+	params.Add("code", code)
+	params.Add("redirect_uri", callback)
+
+	req, err := http.NewRequest("POST", "https://www.reddit.com/api/v1/access_token", strings.NewReader(params.Encode()))
+	if err != nil {
+		return "", "", err
+	}
+
+	req.Header.Add("User-Agent", creds.UserAgent)
+	req.SetBasicAuth(creds.ClientID, creds.ClientSecret)
+	client := http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", "", errors.New("error in request: " + resp.Status)
+	}
+	dataBuf := new(bytes.Buffer)
+	dataBuf.ReadFrom(resp.Body)
+	err = json.Unmarshal(dataBuf.Bytes(), &creds)
+	if err != nil {
+		return "", "", err
+	}
+	return creds.AccessToken, creds.RefreshToken, nil
+}
+
+//exchanges refresh token for access token
+func refreshCreds() error {
+	err := validateCreds()
+	if err != nil {
 		return err
 	}
-  params := url.Values{}
-  params.Add("grant_type", "authorization_code")
-  params.Add("code", code)
-  params.Add("redirect_uri", redir)
 
-  req, err := http.NewRequest("POST", "https://www.reddit.com/api/v1/access_token", strings.NewReader(params.Encode()))
-  if err != nil {
-    return err
-  }
+	params := url.Values{}
+	params.Add("grant_type", "refresh_token")
+	params.Add("refresh_token", creds.RefreshToken)
 
-  req.Header.Add("User-Agent", "native: markov-monitor:beta-testing")
-  req.SetBasicAuth(secs.ClientID, secs.ClientSecret)
-  client := http.Client{}
-  resp, err := client.Do(req)
-  if err != nil {
-    return err
-  }
+	req, err := http.NewRequest("POST", "https://www.reddit.com/api/v1/access_token", strings.NewReader(params.Encode()))
+	if err != nil {
+		return err
+	}
+	req.SetBasicAuth(creds.ClientID, creds.ClientSecret)
+	req.Header.Add("User-Agent", creds.UserAgent)
+	client := http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
 
-  fmt.Println(resp.Status)
-  dataBuf := new(bytes.Buffer)
-  dataBuf.ReadFrom(resp.Body)
-  err = json.Unmarshal(dataBuf.Bytes(), &creds)
-  if err != nil {
-    return err
-  }
-  writeCreds()
-  return nil
+	if resp.StatusCode != 200 {
+		return errors.New("error in request: " + resp.Status)
+	}
+
+	dataBuf := new(bytes.Buffer)
+	dataBuf.ReadFrom(resp.Body)
+	err = json.Unmarshal(dataBuf.Bytes(), &creds)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
-func writeCreds() error {
-  data, err := json.Marshal(creds)
-  if err != nil {
-    return err
-  }
-  ioutil.WriteFile("creds.json", data, 0600)
-  return nil
-}
-
-func refreshCreds() error {
-  
-  params := url.Values{}
-  params.Add("grant_type", "refresh_token")
-  params.Add("refresh_token", creds.RefreshToken)
-
-  req, err := http.NewRequest("POST", "https://www.reddit.com/api/v1/access_token", strings.NewReader(params.Encode()))
-  if err != nil {
-    return err
-  }
-  req.SetBasicAuth(secs.ClientID, secs.ClientSecret)
-  req.Header.Add("User-Agent", "native: markov-monitor:beta-testing")
-
+func validateCreds() error {
+	if creds.ClientID == "" {
+		return errors.New("Client ID not set")
+	}
+	if creds.ClientSecret == "" {
+		return errors.New("Client Secret not set")
+	}
+	if creds.UserAgent == "" {
+		return errors.New("User agent not set")
+	}
+	return nil
 }
