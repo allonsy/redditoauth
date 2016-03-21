@@ -30,6 +30,14 @@ redditoauth.PerformHandshake("http://localhost", []string{"identity"}, true))
   * On startup of the app, you will need to populate access token and refresh token value with `SetAccessToken(string)` and `SetRefreshToken(string)`
   * So long as the app is on, it will cache these tokens so you don't need to keep on re calling these functions or asking reddit for more tokens
   * If you forget to populate the access token and refresh token fields, my library will error, asking you to perform a handshake again
+* Making requests:
+  * After you have performed a handshake or set access/refresh tokens properly call `MakeApiReq(method, url, body, *map[string]interface{})`
+  * The method is the http method (GET, POST, etc...)
+  * The url is the full url with all query parameters like `https://oauth.reddit.com/api/v1/me`
+  * The optional body is an io.Reader that has the body of the request (for posts). If no body is needed, set this to `nil`
+  * The map pointer is a pointer where the json response will be saved into if no errors are encountered
+  * The function will set the error value if an error occurs
+  * If the access token has expired, the code will auto refresh it with the refresh token. If no refresh token is provided, an error will be returned. 
 
 ## Contributing
 * If you have any feature requests, issues, or bugs, please don't be afraid to fill out issues
