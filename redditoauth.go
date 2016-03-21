@@ -6,6 +6,7 @@ import (
 	//"io/ioutil"
 	"bytes"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -195,6 +196,42 @@ func validateCreds() error {
 	}
 	if creds.UserAgent == "" {
 		return errors.New("User agent not set")
+	}
+	return nil
+}
+
+//makes an api request to reddit.
+//The first argument is the http method (GET, POST, PATCH, etc...)
+//The second argument is the url string with all parameters (e.g. https://oauth.reddit.com/api/v1/me).
+//The third argument is an optional body to the request.
+//The fourth argument is a pointer to a map from string to empty interface to store the response json if successful.
+//It returns an error if any.
+//Make sure to have all fields, including access token and/or refresh token
+func MakeApiReq(method, urlstr string, body io.Reader, result *map[string]interface{}) error {
+	if creds.AccessToken == "" {
+		return errors.New("Access token missing")
+	}
+
+	req, err := http.NewRequest(method, urlstr, body)
+	req.Header.Add("User-Agent", creds.UserAgent)
+	req.Header.Add("Authorization", "bearer "+creds.AccessToken)
+
+	client := http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return errors.New("error in request: " + urlstr + ": " + resp.Status)
+	}
+
+	dataBuf := new(bytes.Buffer)
+	dataBuf.ReadFrom(resp.Body)
+	err = json.Unmarshal(dataBuf.Bytes(), result)
+	if err != nil {
+		return err
 	}
 	return nil
 }
